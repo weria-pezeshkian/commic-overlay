@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "commic-overlay"
+version = "0.1.0"
+description = "Wizard-style GUI overlay driving installed command-line tools, starting with CALM"
+readme = "README.md"
+requires-python = ">=3.12"
+# No license file yet - pick one before a real release; left unset rather
+# than guessed.
+keywords = ["membrane", "gui", "overlay"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+]
+# PySide6 only. CALM/MDAnalysis are never declared here - this project
+# drives an already-installed CALM via its own `CALM` console script and
+# reads its installed parser-builder functions for introspection; it does
+# not install, vendor, or depend on CALM as a package.
+dependencies = [
+    "PySide6>=6.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "mypy"]
+
+[project.scripts]
+commic-overlay = "commic_overlay.main:main"
+
+[tool.setuptools.packages.find]
+include = ["commic_overlay*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

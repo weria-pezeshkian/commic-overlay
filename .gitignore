@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Qt / PyQt6
+*.qmlc
+*.jsc
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# This overlay's own local, per-user runtime state - e.g. the
+# last-used-working-directory remembered between runs, any recent-file
+# list. Never shared/committed: it's specific to one person's machine and
+# gets recreated automatically on first use elsewhere.
+settings.json
+.commic_overlay/
