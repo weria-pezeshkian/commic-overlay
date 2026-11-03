@@ -1,35 +1,66 @@
-"""StrideSpinBox: the small up/down stride control used on the Trajectory page."""
+"""IntSpinBox, the integer control for the wizards' count, id and seed fields, and
+StrideSpinBox, its minimum-1 form used for the Trajectory page's stride."""
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QSpinBox, QWidget
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QFocusEvent, QWheelEvent
+from PySide6.QtWidgets import QAbstractScrollArea, QSpinBox, QWidget
 
 
-class StrideSpinBox(QSpinBox):
-    """Integer stride control, minimum 1, defaulting to 1.
+def inside_scroll_area(widget: QWidget) -> bool:
+    """Whether `widget` sits inside a scroll area, a table included."""
+    parent = widget.parentWidget()
+    while parent is not None:
+        if isinstance(parent, QAbstractScrollArea):
+            return True
+        parent = parent.parentWidget()
+    return False
 
-    Up/down arrows only (Qt's own default spin-box buttons) - the
-    decrement arrow disables itself automatically once the value reaches
-    1, since that's already `QAbstractSpinBox`'s standard behavior at its
-    configured minimum; nothing extra is needed for that part.
 
-    Responds to the mouse wheel on hover, with no prior click needed to
-    give it keyboard focus first. `QAbstractSpinBox`'s own default
-    `wheelEvent` only steps the value while the widget already has focus,
-    specifically so a spin box embedded in a scrollable container (a
-    table cell, a form inside a `QScrollArea`) doesn't eat the
-    container's own scroll gesture - that default is overridden here
-    since this control is never embedded in anything scrollable.
+def wheel_steps_spin_box(widget: QWidget) -> bool:
+    """Whether a wheel event over spin box `widget` steps its value: always outside a scroll
+    area, and inside one only while the spin box has focus, so the wheel scrolls the page."""
+    return widget.hasFocus() or not inside_scroll_area(widget)
+
+
+class IntSpinBox(QSpinBox):
+    """Integer control between `minimum` and `maximum`.
+
+    Gaining focus selects the whole text, so typing replaces the value instead of being
+    inserted next to the old digits ("1" -> "51").
+
+    The mouse wheel steps the value on hover, with no prior click needed, except inside a
+    scroll area or table: there it steps only while focused and otherwise scrolls the page
+    (`wheel_steps_spin_box`).
     """
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, minimum: int = 0, maximum: int = 2_147_483_647, value: int = 0, parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
-        self.setMinimum(1)
-        self.setMaximum(1_000_000)
-        self.setValue(1)
+        self.setMinimum(minimum)
+        self.setMaximum(maximum)
+        self.setValue(value)
 
-    def wheelEvent(self, event) -> None:  # noqa: N802 (Qt override, not our naming convention)
+    def focusInEvent(self, event: QFocusEvent) -> None:  # noqa: N802 (Qt override, not our naming convention)
+        super().focusInEvent(event)
+        # After the click that gave focus has placed the cursor.
+        QTimer.singleShot(0, self, self.selectAll)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802 (Qt override, not our naming convention)
+        if not wheel_steps_spin_box(self):
+            event.ignore()
+            return
         delta = event.angleDelta().y()
         if delta != 0:
             self.stepBy(1 if delta > 0 else -1)
         event.accept()
+
+
+class StrideSpinBox(IntSpinBox):
+    """Integer stride control, minimum 1, defaulting to 1. The decrement arrow disables
+    itself at 1, `QAbstractSpinBox`'s standard behavior at its minimum."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(minimum=1, maximum=1_000_000, value=1, parent=parent)

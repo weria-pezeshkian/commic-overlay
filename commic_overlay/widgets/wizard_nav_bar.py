@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import Signal
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
 _STYLE = """
@@ -29,6 +30,15 @@ QPushButton:checked {
     background: transparent;
 }
 """
+_HORIZONTAL_PADDING = 2 * 12 + 4  # the stylesheet's left and right padding, plus a margin
+
+
+def _reserve_bold_width(button: QPushButton) -> None:
+    """Sets `button`'s minimum width to fit its label in the checked state's bold font."""
+    button.ensurePolished()
+    bold = QFont(button.font())
+    bold.setWeight(QFont.Weight.DemiBold)
+    button.setMinimumWidth(QFontMetrics(bold).horizontalAdvance(button.text()) + _HORIZONTAL_PADDING)
 
 
 @dataclass(frozen=True)
@@ -107,6 +117,7 @@ class WizardNavBar(QWidget):
             button.setEnabled(i == 0)
             button.setVisible(step.visible_by_default)
             button.clicked.connect(lambda _checked, key=step.key: self.step_clicked.emit(key))
+            _reserve_bold_width(button)
             self._steps_row.addWidget(button)
             self._buttons[step.key] = button
 

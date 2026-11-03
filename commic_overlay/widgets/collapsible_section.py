@@ -53,3 +53,18 @@ class CollapsibleSection(QWidget):
         self._closed_text = text
         if not self._toggle_button.isChecked():
             self._toggle_button.setText(text)
+
+    def set_expanded(self, expanded: bool) -> None:
+        """Programmatic open/close - e.g. a search filter forcing every matching group
+        open, without the caller reaching into this widget's own internal button."""
+        self._toggle_button.setChecked(expanded)
+
+    def is_expanded(self) -> bool:
+        return self._toggle_button.isChecked()
+
+    @property
+    def content(self) -> QWidget:
+        """The content widget passed to `__init__` - e.g. so a caller can walk its own
+        children (a search filter finding each checkbox a group's own section holds)
+        without reaching into this widget's private `_content` attribute."""
+        return self._content

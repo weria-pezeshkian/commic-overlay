@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "commic-overlay"
 version = "0.1.0"
-description = "Wizard-style GUI overlay driving installed command-line tools, starting with CALM"
+description = "Wizard-style GUI overlay driving installed command-line tools - CALM and TS2CG"
 readme = "README.md"
 requires-python = ">=3.12"
 # No license file yet - pick one before a real release; left unset rather
@@ -15,10 +15,13 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Operating System :: OS Independent",
 ]
-# PySide6 only. CALM/MDAnalysis are never declared here - this project
-# drives an already-installed CALM via its own `CALM` console script and
-# reads its installed parser-builder functions for introspection; it does
-# not install, vendor, or depend on CALM as a package.
+# PySide6 only. CALM/TS2CG/MDAnalysis are never declared here - this
+# project drives each already-installed tool via its own console script
+# (`CALM`, `TS2CG`) and reads its installed parser-builder functions (or,
+# for TS2CG's compiled binaries, their own `-h` output) for introspection;
+# it does not install, vendor, or depend on either tool as a package. The
+# Martini 3 lipidome itself is fetched over plain HTTPS at runtime
+# (stdlib `urllib`/`tarfile` - no extra dependency needed for that either).
 dependencies = [
     "PySide6>=6.6",
 ]

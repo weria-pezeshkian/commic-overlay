@@ -12,17 +12,19 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
+from .launch import launch_directory
 from .theme import apply_theme
 
 
 def main() -> None:
+    directory = launch_directory((sys.stdin, sys.stdout, sys.stderr))
     app = QApplication(sys.argv)
     apply_theme(app)
 
     from .app import MainWindow
 
-    window = MainWindow()
-    window.show()
+    window = MainWindow(launch_directory=directory)
+    window.showMaximized()
     sys.exit(app.exec())
 
 

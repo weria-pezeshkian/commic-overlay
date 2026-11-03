@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
@@ -10,22 +11,32 @@ from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLabel, QPushButton, QVB
 from .. import settings
 from ..theme import mark_primary
 
+DirectorySource = Literal["launch", "remembered", "home", "selected"]
+
+_SOURCE_NOTES: dict[DirectorySource, str] = {
+    "launch": "the directory the overlay was started from",
+    "remembered": "previously most recently used",
+    "home": "your home directory",
+    "selected": "selected",
+}
+
 
 class WorkingDirPage(QWidget):
-    """"Is <remembered>/current your working directory?" + Change/Continue.
+    """"Is this your working directory?" + Change/Continue.
 
-    `current` (`Path.cwd()` at launch) is the fallback whenever there's no
-    remembered directory yet (first run), or the remembered one no longer
-    exists on disk. This directory seeds where every later file picker in
-    the wizard starts browsing.
+    Offers `launch_directory` (the directory a shell started the overlay from) until
+    Continue is clicked, then the remembered most recently used directory, then the
+    home directory. This directory seeds where every later file picker in the wizard
+    starts browsing.
     """
 
     continue_requested = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, launch_directory: Path | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._directory: Path = Path.cwd()
-        self._is_remembered = False
+        self._launch_directory = launch_directory
+        self._directory: Path = Path.home()
+        self._source: DirectorySource = "home"
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(40, 32, 40, 40)
@@ -59,30 +70,29 @@ class WorkingDirPage(QWidget):
         self.refresh()
 
     def refresh(self) -> None:
-        """Re-reads the remembered directory - call each time this page is shown."""
+        """Re-reads the offered directory - call each time this page is shown."""
         remembered = settings.get_last_working_directory()
-        if remembered is not None:
-            self._directory = remembered
-            self._is_remembered = True
+        if self._launch_directory is not None:
+            self._directory, self._source = self._launch_directory, "launch"
+        elif remembered is not None:
+            self._directory, self._source = remembered, "remembered"
         else:
-            self._directory = Path.cwd()
-            self._is_remembered = False
+            self._directory, self._source = Path.home(), "home"
         self._update_labels()
 
     def _update_labels(self) -> None:
-        kind = "previously most recently used" if self._is_remembered else "current"
-        self._question_label.setText(f"Is this your working directory? ({kind})")
+        self._question_label.setText(f"Is this your working directory? ({_SOURCE_NOTES[self._source]})")
         self._path_label.setText(str(self._directory))
 
     def _on_change(self) -> None:
         chosen = QFileDialog.getExistingDirectory(self, "Select working directory", str(self._directory))
         if chosen:
-            self._directory = Path(chosen)
-            self._is_remembered = False
+            self._directory, self._source = Path(chosen), "selected"
             self._update_labels()
 
     def _on_continue(self) -> None:
         settings.set_last_working_directory(self._directory)
+        self._launch_directory = None
         self.continue_requested.emit()
 
     def working_directory(self) -> Path:

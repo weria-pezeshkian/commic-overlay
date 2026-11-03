@@ -18,6 +18,7 @@ gets launched from.
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import partial
 
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -109,6 +110,13 @@ def _write_back_wizard_fields(state: WizardState, values: dict[str, object]) -> 
         state.lipid_species = list(values["lipids"])  # type: ignore[arg-type]
 
 
+def _optional_flag_value(box: QCheckBox, edit: QLineEdit) -> object:
+    if not box.isChecked():
+        return False
+    value = edit.text().strip()
+    return value if value else True
+
+
 class _FieldRow:
     """One FieldSpec's widget(s), plus a get_value() matching build_argv's own value-shape contract."""
 
@@ -145,14 +153,7 @@ class _FieldRow:
             row_layout.addWidget(box)
             row_layout.addWidget(edit)
             self._widget = row
-
-            def _get(box: QCheckBox = box, edit: QLineEdit = edit) -> object:
-                if not box.isChecked():
-                    return False
-                text = edit.text().strip()
-                return text if text else True
-
-            self.get_value = _get
+            self.get_value = partial(_optional_flag_value, box, edit)
         elif spec.kind in ("multichoice", "multi", "append"):
             edit = QLineEdit()
             if isinstance(initial, (list, tuple)):
