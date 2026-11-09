@@ -11,7 +11,8 @@ actually have - `-b_dist`/`-less` on PLM; `-skip_lipids`/`-Rcutoff`/`-keep`/
 inline inside their entry function, with no separate factory to call either
 - `point_placement.py` and `dop_bridge.py` build `INU`'s and `DOP`'s argv
 directly, `dai_bridge.py` calls DAI's underlying function in-process, and
-`libmaker`'s flags are internal to `libmaker_bridge.py`.
+`libmaker_bridge.py` holds `libmaker`'s scaling flags (`LIBMAKER_FIELDS`)
+and sets its other flags itself.
 """
 
 from __future__ import annotations
@@ -65,7 +66,10 @@ PCG_FIELDS: list[FieldSpec] = [
     FieldSpec("function", "-function", "choice", "backmap or analytical_shape", default="backmap",
                choices=["backmap", "analytical_shape"]),
     FieldSpec("WPointDir", "-WPointDir", "bool", "only write the point folder, no full structure", default=False),
-    FieldSpec("Bondlength", "-Bondlength", "float", "initial bond guess", default=0.1),
+    # The overlay's Bondlength default is 0.2, the value TS2CG's tutorials pass; the
+    # backmap step in pipeline.py passes it on every build.
+    FieldSpec("Bondlength", "-Bondlength", "float",
+              "nm per .LIB coordinate unit of every lipid (initial bond guess; PCG alone uses 0.1)", default=0.2),
     FieldSpec("renorm", "-renorm", "bool", "renormalize the lipid molar ratio", default=False),
     FieldSpec("iter", "-iter", "float", "point selections = iter * number of points", default=4.0),
     FieldSpec("incdirtype", "-incdirtype", "choice", "protein direction data type", default="Global",

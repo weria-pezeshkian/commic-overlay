@@ -157,6 +157,7 @@ class WizardState:
     add_wall_beads: bool = False
     plm_overrides: dict[str, object] = field(default_factory=dict)
     pcg_overrides: dict[str, object] = field(default_factory=dict)
+    libmaker_overrides: dict[str, object] = field(default_factory=dict)
     sol_overrides: dict[str, object] = field(default_factory=dict)
 
     # Identifies the current build run, stamped fresh when Run starts -

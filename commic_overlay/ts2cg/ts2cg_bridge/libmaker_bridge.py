@@ -13,6 +13,12 @@ lipidome's own category-per-file organization, but nothing guarantees
 it, and isolating per molecule costs nothing - each conversion is fast).
 Keeps only the snippets for lipids actually selected, discards the rest,
 and concatenates the kept ones into one `.LIB` file.
+
+libmaker lays each lipid out one coordinate unit per bond and multiplies
+z by `-sz` and x/y by `-sxy` (`LIBMAKER_FIELDS`). PCG then multiplies every
+`.LIB` coordinate by its `-Bondlength` (nm; the overlay passes 0.2 unless
+set in the Advanced window), so one bond along z
+spans `-sz` times `-Bondlength` nm in the built membrane.
 """
 
 from __future__ import annotations
@@ -24,8 +30,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .anchor_bead import detect_anchor_bead
+from .introspect import FieldSpec, build_argv
 
 LIB_HEADER = "Description Martini Map CG\nVersion Martini 3\n"
+
+# libmaker's scaling flags, verified against `TS2CG libmaker -h`.
+LIBMAKER_FIELDS: list[FieldSpec] = [
+    FieldSpec("scalingz", "-sz", "float", "z scale of each lipid's .LIB coordinates", default=1.0),
+    FieldSpec("scalingxy", "-sxy", "float", "x-y scale of each lipid's .LIB coordinates", default=1.0),
+]
 
 
 def _write_single_molecule_itp(mol, path: Path) -> None:
@@ -53,10 +66,17 @@ def _write_single_molecule_itp(mol, path: Path) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
-def _run_libmaker(itp_path: Path, base: str, out_dir: Path) -> subprocess.CompletedProcess:
+def libmaker_argv(itp_path: Path, base: str, options: dict[str, object]) -> list[str]:
+    """`TS2CG libmaker` argv for one single-molecule itp, with `options` holding
+    `LIBMAKER_FIELDS` values by dest."""
+    return build_argv("libmaker", LIBMAKER_FIELDS, options) + ["-p", str(itp_path), "-b", base, "-o", "lib.txt"]
+
+
+def _run_libmaker(
+    itp_path: Path, base: str, out_dir: Path, options: dict[str, object]
+) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["TS2CG", "libmaker", "-p", str(itp_path), "-b", base, "-o", "lib.txt"],
-        cwd=out_dir, check=False, capture_output=True, text=True,
+        libmaker_argv(itp_path, base, options), cwd=out_dir, check=False, capture_output=True, text=True
     )
 
 
@@ -71,7 +91,8 @@ def build_lib_file(
     selected_lipids: list[str],
     lipid_to_itp: dict[str, Path],
     out_path: Path,
-    run_libmaker: Callable[[Path, str, Path], subprocess.CompletedProcess] = _run_libmaker,
+    options: dict[str, object] | None = None,
+    run_libmaker: Callable[[Path, str, Path, dict[str, object]], object] = _run_libmaker,
 ) -> LibBuildResult:
     """Builds `out_path` as a `.LIB` file containing exactly `selected_lipids`' own sections.
 
@@ -84,7 +105,8 @@ def build_lib_file(
     source file, comes back in `failed_lipids` without ever calling
     `libmaker`.
 
-    `run_libmaker` is injectable so tests can stub out the real
+    `options` holds `LIBMAKER_FIELDS` values by dest, passed to every
+    `libmaker` call. `run_libmaker` is injectable so tests can stub out the real
     subprocess call entirely (see `tests/test_libmaker_bridge.py`).
     """
     from TS2CG.core.itp_parser import read_itp_molecules  # deferred: see introspect.py's own note
@@ -112,7 +134,7 @@ def build_lib_file(
             isolated_itp = tmp_path / f"{name}.itp"
             _write_single_molecule_itp(mol, isolated_itp)
             base = detect_anchor_bead(mol)
-            run_libmaker(isolated_itp, base, tmp_path)
+            run_libmaker(isolated_itp, base, tmp_path, options or {})
 
             snippet_path = tmp_path / f"{name}_lib.txt"
             if snippet_path.exists():

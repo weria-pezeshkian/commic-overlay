@@ -1,4 +1,5 @@
-"""AdvancedWindow: every PLM/PCG flag not already owned by a wizard page's own widget.
+"""AdvancedWindow: every PLM/PCG flag not already owned by a wizard page's own widget,
+and libmaker's scaling flags for the lipid library.
 
 Unlike CALM's Advanced window, there's very little overlap between TS2CG's
 wizard pages and PLM/PCG's own flat flag list - the wizard's own values
@@ -6,7 +7,7 @@ wizard pages and PLM/PCG's own flat flag list - the wizard's own values
 dedicated `state.py` fields and are never part of `PLM_FIELDS`/
 `PCG_FIELDS` at all (shape data is its own `[Shape Data]` section, not a
 PLM/PCG command-line flag). So this window just edits `state.plm_overrides`/
-`state.pcg_overrides` directly - no CALM-style write-back-to-the-owning-page
+`state.pcg_overrides`/`state.libmaker_overrides` directly - no CALM-style write-back-to-the-owning-page
 system is needed, since there's no owning page to write back to for
 almost every field here.
 """
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
 from ...theme import mark_primary
 from ..state import WizardState
 from ..ts2cg_bridge.introspect import PCG_FIELDS, PLM_FIELDS, FieldSpec
+from ..ts2cg_bridge.libmaker_bridge import LIBMAKER_FIELDS
 
 
 class AdvancedWindow(QDialog):
@@ -46,6 +48,9 @@ class AdvancedWindow(QDialog):
         tabs = QTabWidget()
         self._plm_getters = self._build_tab(tabs, "PLM", PLM_FIELDS, self._state.plm_overrides)
         self._pcg_getters = self._build_tab(tabs, "PCG", PCG_FIELDS, self._state.pcg_overrides)
+        self._libmaker_getters = self._build_tab(
+            tabs, "libmaker", LIBMAKER_FIELDS, self._state.libmaker_overrides
+        )
         layout.addWidget(tabs, stretch=1)
 
         buttons_row = QHBoxLayout()
@@ -97,31 +102,37 @@ class AdvancedWindow(QDialog):
     def _on_apply(self) -> None:
         self._state.plm_overrides = self._collect(self._plm_getters)
         self._state.pcg_overrides = self._collect(self._pcg_getters)
+        self._state.libmaker_overrides = self._collect(self._libmaker_getters)
         self.accept()
 
     @staticmethod
     def _collect(getters: dict[str, tuple[FieldSpec, object]]) -> dict[str, object]:
+        """The fields whose value differs from the default the window shows, so an
+        override exists only where one was set."""
         result: dict[str, object] = {}
         for dest, (spec, widget) in getters.items():
-            if isinstance(widget, QCheckBox):
-                if widget.isChecked():
-                    result[dest] = True
-                continue
-            text = widget.text().strip()
-            if not text:
-                continue
-            if spec.kind == "floats3":
-                parts = text.split()
-                if len(parts) == 3:
-                    result[dest] = tuple(float(p) for p in parts)
-            elif spec.kind == "ints2":
-                parts = text.split()
-                if len(parts) == 2:
-                    result[dest] = tuple(int(p) for p in parts)
-            elif spec.kind == "int":
-                result[dest] = int(text)
-            elif spec.kind == "float":
-                result[dest] = float(text)
-            else:
-                result[dest] = text
+            value = AdvancedWindow._field_value(spec, widget)
+            if value is not None and value != spec.default:
+                result[dest] = value
         return result
+
+    @staticmethod
+    def _field_value(spec: FieldSpec, widget: object) -> object:
+        """The field's value in its spec's type, or None when the field is empty."""
+        if isinstance(widget, QCheckBox):
+            return widget.isChecked()
+        assert isinstance(widget, QLineEdit)
+        text = widget.text().strip()
+        if not text:
+            return None
+        if spec.kind == "floats3":
+            parts = text.split()
+            return tuple(float(p) for p in parts) if len(parts) == 3 else None
+        if spec.kind == "ints2":
+            parts = text.split()
+            return tuple(int(p) for p in parts) if len(parts) == 2 else None
+        if spec.kind == "int":
+            return int(text)
+        if spec.kind == "float":
+            return float(text)
+        return text

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from commic_overlay.ts2cg.ts2cg_bridge.libmaker_bridge import build_lib_file
+from commic_overlay.ts2cg.ts2cg_bridge.libmaker_bridge import build_lib_file, libmaker_argv
 
 _POPC_ITP = """\
 [ moleculetype ]
@@ -39,19 +39,30 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content)
 
 
-def _stub_writing():
+class _StubLibmaker:
     """A fake `run_libmaker` writing `{isolated_itp.stem}_lib.txt` - mirrors `maker_itp`'s
     own output naming, scoped to whichever single-molecule itp file it was actually
     called with (the real per-molecule isolation, not the original shared source file).
-    Tracks each (itp stem, base) call so a test can assert the detected anchor bead."""
-    calls: list[tuple[str, str]] = []
+    Records each (itp stem, base) call so a test can assert the detected anchor bead,
+    and each call's options."""
 
-    def fake(itp_path: Path, base: str, out_dir: Path):
-        calls.append((itp_path.stem, base))
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self.options: list[dict[str, object]] = []
+
+    def __call__(self, itp_path: Path, base: str, out_dir: Path, options: dict[str, object]) -> None:
+        self.calls.append((itp_path.stem, base))
+        self.options.append(options)
         (out_dir / f"{itp_path.stem}_lib.txt").write_text(f"[{itp_path.stem}]\nanchor={base}\n")
-        return None
 
-    return fake, calls
+
+def _stub_writing() -> tuple[_StubLibmaker, list[tuple[str, str]]]:
+    fake = _StubLibmaker()
+    return fake, fake.calls
+
+
+def _write_nothing(itp_path: Path, base: str, out_dir: Path, options: dict[str, object]) -> None:
+    """A fake `run_libmaker` that runs but writes no snippet."""
 
 
 def test_build_lib_file_converts_each_selected_lipid(tmp_path: Path) -> None:
@@ -99,10 +110,7 @@ def test_build_lib_file_reports_a_lipid_libmaker_silently_skipped(tmp_path: Path
     _write(pc_itp, _POPC_ITP)
     lipid_to_itp = {"POPC": pc_itp}
 
-    def no_output(itp_path, base, out_dir):
-        return None  # libmaker ran but wrote nothing
-
-    result = build_lib_file(["POPC"], lipid_to_itp, tmp_path / "out.LIB", run_libmaker=no_output)
+    result = build_lib_file(["POPC"], lipid_to_itp, tmp_path / "out.LIB", run_libmaker=_write_nothing)
 
     assert result.converted_lipids == []
     assert result.failed_lipids == ["POPC"]
@@ -150,3 +158,26 @@ def test_build_lib_file_preserves_selection_order_in_output(tmp_path: Path) -> N
 
     content = (tmp_path / "out.LIB").read_text()
     assert content.index("[CHOL]") < content.index("[POPC]")
+
+
+def test_build_lib_file_passes_the_scaling_options_to_every_libmaker_call(tmp_path: Path) -> None:
+    combined_itp = tmp_path / "combined.itp"
+    _write(combined_itp, _POPC_ITP + "\n" + _CHOL_ITP)
+    lipid_to_itp = {"POPC": combined_itp, "CHOL": combined_itp}
+    fake = _StubLibmaker()
+
+    build_lib_file(["POPC", "CHOL"], lipid_to_itp, tmp_path / "out.LIB", {"scalingz": 2.0}, run_libmaker=fake)
+
+    assert fake.options == [{"scalingz": 2.0}, {"scalingz": 2.0}]
+
+
+def test_libmaker_argv_adds_the_set_scaling_flags() -> None:
+    argv = libmaker_argv(Path("POPC.itp"), "PO4", {"scalingz": 2.0, "scalingxy": 0.5})
+    assert argv == [
+        "TS2CG", "libmaker", "-sz", "2.0", "-sxy", "0.5", "-p", "POPC.itp", "-b", "PO4", "-o", "lib.txt",
+    ]
+
+
+def test_libmaker_argv_leaves_unset_scaling_flags_out() -> None:
+    argv = libmaker_argv(Path("POPC.itp"), "PO4", {})
+    assert argv == ["TS2CG", "libmaker", "-p", "POPC.itp", "-b", "PO4", "-o", "lib.txt"]

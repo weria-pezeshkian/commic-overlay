@@ -32,6 +32,8 @@ from .protein_structure import is_rotated, write_rotated_structure
 if TYPE_CHECKING:
     from ..state import WizardState
 
+_BONDLENGTH_DEFAULT = next(f.default for f in PCG_FIELDS if f.dest == "Bondlength")
+
 
 @dataclass
 class SubprocessStep:
@@ -194,7 +196,7 @@ def _place_domains_steps(state: WizardState, point_directory: Path) -> list[Step
 
 
 def _build_lib(state: WizardState, lib_path: Path) -> None:
-    result = build_lib_file(state.selected_lipids, state.lipid_to_itp, lib_path)
+    result = build_lib_file(state.selected_lipids, state.lipid_to_itp, lib_path, state.libmaker_overrides)
     if result.failed_lipids:
         names = ", ".join(result.failed_lipids)
         raise RuntimeError(
@@ -236,6 +238,7 @@ def _final_pcg_step(
     input_str_path = build_directory / INPUT_STR_FILENAME
     lib_path = build_directory / LIB_FILENAME
     pcg_values: dict[str, object] = dict(state.pcg_overrides)
+    pcg_values.setdefault("Bondlength", _BONDLENGTH_DEFAULT)
     pcg_values.update(
         {
             # Relative to this step's cwd: PCG prefixes `-dts` with "./" (ReadDTSFolder.cpp).

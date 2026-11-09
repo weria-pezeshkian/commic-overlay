@@ -97,3 +97,17 @@ def test_final_pcg_step_passes_the_point_directory_relative_to_its_cwd(tmp_path:
     assert isinstance(final_step, SubprocessStep)
     assert final_step.cwd == str(tmp_path)
     assert final_step.argv[final_step.argv.index("-dts") + 1] == "TS2CG_point"
+
+
+def test_final_pcg_step_passes_bondlength_0_2_by_default(tmp_path: Path) -> None:
+    final_step = build_pipeline(_state(tmp_path))[-1]
+    assert isinstance(final_step, SubprocessStep)
+    assert final_step.argv[final_step.argv.index("-Bondlength") + 1] == "0.2"
+
+
+def test_final_pcg_step_passes_a_bondlength_set_in_the_advanced_window(tmp_path: Path) -> None:
+    state = _state(tmp_path)
+    state.pcg_overrides = {"Bondlength": 0.15}
+    final_step = build_pipeline(state)[-1]
+    assert isinstance(final_step, SubprocessStep)
+    assert final_step.argv[final_step.argv.index("-Bondlength") + 1] == "0.15"
