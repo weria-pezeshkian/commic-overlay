@@ -17,7 +17,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .outputs import build_dir
 from .point_placement import protein_list_line
+from .protein_structure import structure_path
 
 if TYPE_CHECKING:
     from ..state import WizardState
@@ -84,16 +86,18 @@ def build_shape_only_str(state: WizardState) -> str:
 def build_input_str(state: WizardState) -> str:
     """The full `input.str` content for the current wizard state.
 
-    `include` lines use each protein's own absolute `.gro` path directly
-    (no copy-into-the-build-directory step) - a plain `std::ifstream` open
-    handles an absolute path the same as a relative one.
+    `include` lines use each protein's own absolute `.gro` path, or for a
+    rotated protein the rotated copy the pipeline writes into the build
+    directory (`protein_structure.py::structure_path`) - a plain
+    `std::ifstream` open handles an absolute path the same as a relative one.
     `[Shape Data]` is only written for the analytical-shape path;
     `[Protein List]` only if at least one protein was added - PCG's own
     `CheckProteinInfo` requires one entry per inclusion type id present in
     the point directory, so this must always match whatever
     `point_placement.py` actually placed there.
     """
-    sections = [f"include {Path(p.gro_path)}" for p in state.proteins]
+    build_directory = build_dir(Path(state.working_directory))
+    sections = [f"include {structure_path(p, build_directory)}" for p in state.proteins]
     sections.append(_build_lipids_list_section(state))
     if state.path_choice == "analytical_shape":
         sections.append(_build_shape_data_section(state))

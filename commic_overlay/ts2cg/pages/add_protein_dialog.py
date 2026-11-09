@@ -1,16 +1,19 @@
-"""AddProteinDialog: load a protein .gro, see it live against the two leaflet planes, and
-collect everything one `ProteinSpec` needs - INU's own placement fields (radius, count,
-optional curvature targeting, seed) plus the `[Protein List]` entry it becomes (`Z0`, the
-real depth mechanism - see `state.py::ProteinSpec`'s own docstring for why `.gro`
-coordinates are never touched to express depth; `Ratio`, always collected even though this
-placement path doesn't consult it at runtime - PCG's own `[Protein List]` parser requires
-the line regardless).
+"""AddProteinDialog: load a protein .gro, see it placed against the two leaflet planes the
+way PCG places it, and collect everything one `ProteinSpec` needs - INU's own placement
+fields (radius, count, optional curvature targeting, seed) plus the `[Protein List]` entry it
+becomes (`Z0`, the depth, measured from the outer leaflet's points; `Ratio`, always
+collected even though this placement path doesn't consult it at runtime - PCG's own
+`[Protein List]` parser requires the line regardless), and the orientation the run applies
+to a copy of the structure: the principal-axis alignment, then the rotation about x and y
+(`ts2cg_bridge/protein_structure.py`).
 
 Opened with an `existing` protein, it edits that protein: every field starts from its values,
 its structure is reloaded, and the result keeps its type id.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import matplotlib
 import numpy as np
@@ -31,43 +34,43 @@ from PySide6.QtWidgets import (  # noqa: E402
 )
 
 from ...theme import mark_primary
+from ...widgets.angle_control import AngleControl
 from ...widgets.float_spinbox import FloatSpinBox
 from ...widgets.scroll_spinbox import IntSpinBox
 from ..state import ProteinSpec, WizardState
+from ..ts2cg_bridge.point_placement import outer_leaflet_height, placed_protein_positions
+from ..ts2cg_bridge.protein_structure import (
+    GroStructure,
+    footprint_diameter,
+    molecule_name,
+    read_gro,
+    rotate_about_center,
+)
 
-_DEFAULT_THICKNESS = 3.8  # TS2CG PLM's own -bilayerThickness default
 _DIALOG_SIZE = (1180, 700)
 _SCREEN_MARGIN = 80  # kept free around the dialog when the screen is smaller than _DIALOG_SIZE
 _PREVIEW_MINIMUM_SIZE = 420
 _SETTINGS_MAXIMUM_WIDTH = 560
 _PREVIEW_ZOOM = 0.85  # shrinks the 3D box inside the canvas so the tick labels fit
-
-
-def _current_bilayer_thickness(state: WizardState) -> float:
-    """Whatever membrane thickness is actually in effect for this run right now - the
-    analytical shape's own Thickness field, or PLM's -bilayerThickness override if the
-    mesh-file path set one, falling back to PLM's own real default otherwise. Read fresh
-    each time the preview redraws, so an Advanced-window edit made after this dialog was
-    first opened is picked up immediately, not frozen at whatever it was on open.
-    """
-    if state.path_choice == "analytical_shape":
-        thickness = state.shape_params.get("Thickness")
-        if isinstance(thickness, int | float):
-            return float(thickness)
-    override = state.plm_overrides.get("bilayerThickness")
-    if isinstance(override, int | float):
-        return float(override)
-    return _DEFAULT_THICKNESS
-
-
-def _gro_title(gro_path: str) -> str:
-    """A .gro file's own first line (its title comment) - the exact name PCG itself gives
-    this structure as a MolType when `include`d (`GenerateMolType.cpp:100`: `GF.GetTitle()`,
-    not any residue name), so `[Protein List]`'s own `ProteinName` column has to match this,
-    not the protein's chemistry.
-    """
-    with open(gro_path) as f:
-        return f.readline().strip()
+_PREVIEW_MARGIN = 1.0  # nm of membrane shown around the protein's footprint
+_EMPTY_HALF_SPAN = 5.0  # nm of membrane shown on each side before a structure loads
+_MIDPLANE_STYLE = {"color": "#777777", "linestyle": "--", "linewidth": 0.8}
+_HINT_STYLE = "color: #555;"
+_ROTATION_HINT = (
+    "The rotations turn the structure about its center of geometry, about x first, then about "
+    "y, starting from the file's orientation, or from the aligned one when Align z to principal "
+    "axis is ticked; 180° about x flips it. The run writes the turned structure to a new .gro "
+    "in TS2CG_build/ and builds the membrane with it."
+)
+_RADIUS_TOOLTIP = (
+    "TS2CG's INU puts each protein at a random point at least this far from the center of "
+    "every protein placed before it (its --radius)."
+)
+_ALIGN_TOOLTIP = (
+    "Turns the protein so its first principal component, the direction its beads spread along "
+    "most, points along z, the membrane normal, with the end that pointed up in the file on "
+    "top. Ticking or unticking it sets both rotations to 0°."
+)
 
 
 class AddProteinDialog(QDialog):
@@ -82,8 +85,10 @@ class AddProteinDialog(QDialog):
         self._state = state
         self._type_id = next_type_id if existing is None else existing.type_id
         self._gro_path = ""
-        self._positions = None
+        self._structure: GroStructure | None = None
         self._result: ProteinSpec | None = None
+        # A new protein's distance follows its footprint until the user sets one.
+        self._radius_follows_footprint = existing is None
 
         self.setWindowTitle("Add protein" if existing is None else "Edit protein")
         available = self.screen().availableGeometry()
@@ -123,10 +128,36 @@ class AddProteinDialog(QDialog):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
         self._z0_box = FloatSpinBox(minimum=-50.0, maximum=50.0, value=0.0, step=0.1, decimals=2)
         self._z0_box.valueChanged.connect(self._redraw_preview)
-        form.addRow("Z offset (nm, along the membrane normal):", self._z0_box)
+        form.addRow("Z0 (nm, from the outer leaflet along the normal):", self._z0_box)
+        self._z0_hint = QLabel()
+        self._z0_hint.setWordWrap(True)
+        self._z0_hint.setStyleSheet(_HINT_STYLE)
+        form.addRow(self._z0_hint)
+
+        self._align_check = QCheckBox("Align z to principal axis")
+        self._align_check.setToolTip(_ALIGN_TOOLTIP)
+        self._align_check.toggled.connect(self._on_align_toggled)
+        form.addRow("", self._align_check)
+        self._rotation_x = AngleControl()
+        self._rotation_x.valueChanged.connect(self._redraw_preview)
+        form.addRow("Rotation about x:", self._rotation_x)
+        self._rotation_y = AngleControl()
+        self._rotation_y.valueChanged.connect(self._redraw_preview)
+        form.addRow("Rotation about y:", self._rotation_y)
+        rotation_hint = QLabel(_ROTATION_HINT)
+        rotation_hint.setWordWrap(True)
+        rotation_hint.setStyleSheet(_HINT_STYLE)
+        form.addRow(rotation_hint)
 
         self._radius_box = FloatSpinBox(minimum=0.1, maximum=100.0, value=1.0, step=0.1, decimals=2)
-        form.addRow("Exclusion radius (nm):", self._radius_box)
+        self._radius_box.setToolTip(_RADIUS_TOOLTIP)
+        self._radius_box.valueChanged.connect(self._on_radius_edited)
+        form.addRow("Minimum distance between protein centers (nm):", self._radius_box)
+        self._radius_hint = QLabel()
+        self._radius_hint.setWordWrap(True)
+        self._radius_hint.setStyleSheet(_HINT_STYLE)
+        self._radius_hint.setVisible(False)
+        form.addRow(self._radius_hint)
 
         self._count_box = IntSpinBox(minimum=1, maximum=10_000, value=1)
         form.addRow("Number of proteins:", self._count_box)
@@ -172,6 +203,10 @@ class AddProteinDialog(QDialog):
         buttons_row.addWidget(self._add_button)
         layout.addLayout(buttons_row)
 
+        # Enter in a field commits the typed value and leaves every button unclicked.
+        for button in self.findChildren(QPushButton):
+            button.setAutoDefault(False)
+
         if existing is not None:
             self._fill_from(existing)
         self._redraw_preview()
@@ -186,6 +221,11 @@ class AddProteinDialog(QDialog):
         self._k_factor_box.setValue(protein.k_factor)
         self._seed_check.setChecked(protein.seed is not None)
         self._seed_box.setValue(protein.seed or 0)
+        self._align_check.blockSignals(True)  # keeps the protein's own rotations
+        self._align_check.setChecked(protein.align_principal_axis)
+        self._align_check.blockSignals(False)
+        self._rotation_x.setValue(protein.rotation_x)
+        self._rotation_y.setValue(protein.rotation_y)
         self._load_structure(protein.gro_path)
 
     def result_protein(self) -> ProteinSpec | None:
@@ -198,47 +238,81 @@ class AddProteinDialog(QDialog):
             self._load_structure(path)
 
     def _load_structure(self, path: str) -> None:
-        """Reads `path`'s positions for the preview; Add stays disabled until one loads."""
-        import MDAnalysis as mda
-
+        """Reads `path` the way PCG reads it, for the preview; Add stays disabled until one loads."""
         try:
-            universe = mda.Universe(path)
-        except Exception as exc:  # noqa: BLE001 - surfaced to the user, not a programming error
+            structure = read_gro(Path(path))
+        except (OSError, ValueError, IndexError) as exc:
             self._path_label.setText(f"Could not read {path}: {exc}")
             return
         self._gro_path = path
-        self._positions = universe.atoms.positions.copy()
+        self._structure = structure
         self._path_label.setText(path)
         self._add_button.setEnabled(True)
         self._redraw_preview()
 
-    def _redraw_preview(self, *_args: object) -> None:
-        self._axes.clear()
-        thickness = _current_bilayer_thickness(self._state)
-        z0 = self._z0_box.value()
+    def _on_radius_edited(self, _value: float) -> None:
+        self._radius_follows_footprint = False
 
-        if self._positions is not None:
-            # TS2CG/Angstrom .gro positions are nm*10 - this preview only cares about
-            # relative shape, so positions are shown in the same units the .gro file
-            # already uses (nm, matching MDAnalysis's own unit convention), offset by
-            # Z0 along z the same way GenProtein's own `DH = Normal * Z0` does for a
-            # locally-flat approximation of the membrane normal.
-            positions = self._positions / 10.0 + [0.0, 0.0, z0]
-            self._axes.scatter(positions[:, 0], positions[:, 1], positions[:, 2], s=4, c="#2a6fdb")
-            span = max(float(np.ptp(positions[:, :2])), 1.0) * 0.75
-            cx, cy = positions[:, 0].mean(), positions[:, 1].mean()
+    def _update_footprint(self, oriented: np.ndarray) -> None:
+        """Shows the oriented protein's footprint, and sets the distance to it while the
+        distance follows the footprint."""
+        footprint = footprint_diameter(oriented)
+        if self._radius_follows_footprint:
+            self._radius_box.blockSignals(True)
+            self._radius_box.setValue(footprint)
+            self._radius_box.blockSignals(False)
+            text = (
+                f"Set to this protein's footprint, {footprint:.2f} nm across in this orientation, so "
+                "copies cannot overlap. It follows the orientation until you change it."
+            )
         else:
-            span = 5.0
-            cx = cy = 0.0
+            text = (
+                f"This protein's footprint is {footprint:.2f} nm across in this orientation; a "
+                "smaller distance lets copies overlap."
+            )
+        self._radius_hint.setText(text)
+        self._radius_hint.setVisible(True)
 
-        x = [cx - span, cx + span]
-        y = [cy - span, cy + span]
+    def _on_align_toggled(self, _checked: bool) -> None:
+        """Sets both rotations to 0°, so they turn the protein from its new starting orientation."""
+        self._rotation_x.setValue(0.0)
+        self._rotation_y.setValue(0.0)
+        self._redraw_preview()
+
+    def _redraw_preview(self, *_args: object) -> None:
+        """Draws the protein where PCG puts it on a flat stretch of membrane: the midplane at
+        z = 0 (dashed), the two leaflets' point planes at ± the outer leaflet's height."""
+        self._axes.clear()
+        height = outer_leaflet_height(self._state)
+        self._z0_hint.setText(
+            f"PCG puts the protein's center of geometry on the outer leaflet's points, {height:.2f} nm "
+            f"above the membrane midplane, then moves it by Z0 along the normal. Z0 = {-height:.2f} "
+            "centers it in the bilayer."
+        )
+
+        if self._structure is not None:
+            rotated = rotate_about_center(
+                self._structure.positions,
+                self._rotation_x.value(),
+                self._rotation_y.value(),
+                self._align_check.isChecked(),
+            )
+            self._update_footprint(rotated)
+            positions = placed_protein_positions(rotated, height, self._z0_box.value())
+            self._axes.scatter(positions[:, 0], positions[:, 1], positions[:, 2], s=4, c="#2a6fdb")
+            span = float(np.abs(positions[:, :2]).max()) + _PREVIEW_MARGIN
+        else:
+            span = _EMPTY_HALF_SPAN
+
+        x = [-span, span]
+        y = [-span, span]
         X, Y = np.meshgrid(x, y)
-        self._axes.plot_surface(X, Y, np.full_like(X, thickness / 2), color="black", alpha=0.15)
-        self._axes.plot_surface(X, Y, np.full_like(X, -thickness / 2), color="black", alpha=0.15)
+        self._axes.plot_surface(X, Y, np.full_like(X, height), color="black", alpha=0.15)
+        self._axes.plot_surface(X, Y, np.full_like(X, -height), color="black", alpha=0.15)
+        self._axes.plot([-span, span, span, -span, -span], [-span, -span, span, span, -span], 0.0, **_MIDPLANE_STYLE)
 
-        z_low, z_high = -thickness / 2, thickness / 2
-        if self._positions is not None:
+        z_low, z_high = -height, height
+        if self._structure is not None:
             z_low = min(z_low, float(positions[:, 2].min()))
             z_high = max(z_high, float(positions[:, 2].max()))
         self._axes.set_xlim(*x)
@@ -252,9 +326,11 @@ class AddProteinDialog(QDialog):
         self._canvas.draw_idle()
 
     def _on_add_clicked(self) -> None:
+        if self._structure is None:
+            return
         self._result = ProteinSpec(
             type_id=self._type_id,
-            name=_gro_title(self._gro_path),
+            name=molecule_name(self._structure.title),
             gro_path=self._gro_path,
             radius=self._radius_box.value(),
             num_proteins=self._count_box.value(),
@@ -263,5 +339,8 @@ class AddProteinDialog(QDialog):
             seed=self._seed_box.value() if self._seed_check.isChecked() else None,
             ratio=self._ratio_box.value(),
             z0=self._z0_box.value(),
+            align_principal_axis=self._align_check.isChecked(),
+            rotation_x=self._rotation_x.value(),
+            rotation_y=self._rotation_y.value(),
         )
         self.accept()

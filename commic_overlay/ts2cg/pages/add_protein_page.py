@@ -19,7 +19,7 @@ from ...theme import mark_primary
 from ..state import ProteinSpec, WizardState
 from .add_protein_dialog import AddProteinDialog
 
-_COLUMNS = ["Type", "Name", "Count", "Z0 (nm)", "", ""]
+_COLUMNS = ["Type", "Name", "Count", "Z0 (nm)", "Rotation x, y", "", ""]
 
 
 class AddProteinPage(QWidget):
@@ -74,12 +74,17 @@ class AddProteinPage(QWidget):
             self._table.setItem(row, 1, QTableWidgetItem(protein.name))
             self._table.setItem(row, 2, QTableWidgetItem(str(protein.num_proteins)))
             self._table.setItem(row, 3, QTableWidgetItem(f"{protein.z0:.2f}"))
+            rotation_item = QTableWidgetItem(f"{protein.rotation_x:.1f}°, {protein.rotation_y:.1f}°")
+            if protein.align_principal_axis:
+                rotation_item.setText(f"aligned + {rotation_item.text()}")
+                rotation_item.setToolTip("Aligned z to the principal axis, then rotated by these angles.")
+            self._table.setItem(row, 4, rotation_item)
             edit_button = QPushButton("Edit")
             edit_button.clicked.connect(lambda _checked, p=protein: self._on_edit(p))
-            self._table.setCellWidget(row, 4, edit_button)
+            self._table.setCellWidget(row, 5, edit_button)
             remove_button = QPushButton("Delete row")
             remove_button.clicked.connect(lambda _checked, p=protein: self._on_remove(p))
-            self._table.setCellWidget(row, 5, remove_button)
+            self._table.setCellWidget(row, 6, remove_button)
         self._table.resizeColumnsToContents()
 
     def _on_edit(self, protein: ProteinSpec) -> None:

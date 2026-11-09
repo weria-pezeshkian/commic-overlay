@@ -4,7 +4,8 @@ Builds the point directory (mesh-file path: `PLM`; analytical-shape path:
 `PCG -function analytical_shape -WPointDir`, from a `[Shape Data]`-only
 `input_shape.str`), places each added protein (`INU`), distributes domains
 (`DOP`), applies the Place Domains operations, assembles the `.LIB` scoped
-to the selected lipids, writes `input.str`, and runs `PCG -function backmap`
+to the selected lipids, writes each rotated protein's `.gro`, writes
+`input.str`, and runs `PCG -function backmap`
 to build the structure. Each step edits the same point directory or reads a
 previous step's output, so the steps form a strictly sequential list.
 """
@@ -25,7 +26,8 @@ from .input_str import build_input_str, build_shape_only_str
 from .introspect import PCG_FIELDS, PLM_FIELDS, build_argv
 from .libmaker_bridge import build_lib_file
 from .outputs import INPUT_STR_FILENAME, LIB_FILENAME, OUTPUT_PREFIX, build_dir, point_dir
-from .point_placement import build_inu_argv
+from .point_placement import build_inu_argv, check_protein_count
+from .protein_structure import is_rotated, write_rotated_structure
 
 if TYPE_CHECKING:
     from ..state import WizardState
@@ -74,6 +76,7 @@ def build_pipeline(state: WizardState) -> list[Step]:
     steps.extend(_distribute_domains_steps(state, working_dir, point_directory, build_directory))
     steps.extend(_place_domains_steps(state, point_directory))
     steps.append(_build_lib_step(state, build_directory))
+    steps.extend(_rotated_structure_steps(state, build_directory))
     steps.append(_write_input_str_step(state, build_directory))
     steps.append(_final_pcg_step(state, working_dir, point_directory, build_directory))
     return steps
@@ -144,6 +147,12 @@ def _protein_placement_steps(state: WizardState, working_dir: Path, point_direct
     for protein in state.proteins:
         argv = build_inu_argv(str(point_directory), protein)
         steps.append(SubprocessStep(f"Place protein {protein.name} (type {protein.type_id})", argv, str(working_dir)))
+        steps.append(
+            PythonStep(
+                f"Check every protein of type {protein.type_id} fits",
+                partial(check_protein_count, point_directory, protein),
+            )
+        )
     return steps
 
 
@@ -199,6 +208,18 @@ def _build_lib(state: WizardState, lib_path: Path) -> None:
 
 def _build_lib_step(state: WizardState, build_directory: Path) -> PythonStep:
     return PythonStep("Build lipid library (.LIB)", partial(_build_lib, state, build_directory / LIB_FILENAME))
+
+
+def _rotated_structure_steps(state: WizardState, build_directory: Path) -> list[Step]:
+    """One step per rotated protein, writing the rotated `.gro` that `input.str` includes."""
+    return [
+        PythonStep(
+            f"Write rotated structure of protein type {protein.type_id}",
+            partial(write_rotated_structure, protein, build_directory),
+        )
+        for protein in state.proteins
+        if is_rotated(protein)
+    ]
 
 
 def _write_input_str(state: WizardState, input_str_path: Path) -> None:

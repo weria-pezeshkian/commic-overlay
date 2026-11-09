@@ -107,6 +107,7 @@ class WizardNavBar(QWidget):
             item = self._steps_row.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()  # off screen now; deleteLater deletes it once control returns to the event loop
                 widget.deleteLater()
         self._buttons = {}
 

@@ -21,9 +21,15 @@ class ProteinSpec:
     `[Protein List]` parser requires the line regardless (`BackMap.cpp`'s
     6-field check), and the field only matters if a point directory ever
     reaches PCG with no inclusions at all (not a path this wizard takes,
-    but the file format doesn't know that). `z0` is the real depth
-    mechanism (nm, along the local membrane normal at each inclusion's
-    point) - not a `.gro` coordinate edit.
+    but the file format doesn't know that). `z0` (nm) sets the depth: PCG
+    centers the structure on its center of geometry and puts that center at
+    the inclusion's outer-leaflet point plus `z0` along the point's normal,
+    so `z0 = -thickness/2` centers it in the bilayer
+    (`ts2cg_bridge/point_placement.py::placed_protein_positions`).
+    `align_principal_axis` turns the structure about its center of geometry
+    so its first principal component points along z; `rotation_x`/`rotation_y`
+    (degrees) then turn it further, about x first. A turned protein is built
+    from the copy `ts2cg_bridge/protein_structure.py` writes.
     """
 
     type_id: int
@@ -36,6 +42,9 @@ class ProteinSpec:
     seed: int | None = None
     ratio: float = 0.0
     z0: float = 0.0
+    align_principal_axis: bool = False
+    rotation_x: float = 0.0
+    rotation_y: float = 0.0
 
 
 @dataclass

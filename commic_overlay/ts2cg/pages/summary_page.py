@@ -1,4 +1,4 @@
-"""SummaryPage: wall-beads toggle, Advanced, and Continue -> Run."""
+"""SummaryPage: wall-beads toggle, Advanced, Save config, and Run."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ...theme import mark_primary
+from ...widgets.config_dialogs import ask_config_save_path
+from ..config import TOOL, save_config
 from ..state import WizardState
 from ..ts2cg_bridge.preview_membrane import prune_domain_ops
 from .advanced_window import AdvancedWindow
@@ -39,12 +41,21 @@ class SummaryPage(QWidget):
 
         layout.addStretch(1)
 
+        self._save_status = QLabel()
+        self._save_status.setStyleSheet("color: #555;")
+        self._save_status.setWordWrap(True)
+        layout.addWidget(self._save_status)
+
         buttons_row = QHBoxLayout()
         advanced_button = QPushButton("Advanced")
         advanced_button.clicked.connect(self._on_advanced_clicked)
         buttons_row.addWidget(advanced_button)
+        save_button = QPushButton("Save config")
+        save_button.setToolTip("Saves every step's settings to a file Load config on Working Directory reads back.")
+        save_button.clicked.connect(self._on_save_config)
+        buttons_row.addWidget(save_button)
         buttons_row.addStretch(1)
-        self._run_button = QPushButton("Continue")
+        self._run_button = QPushButton("Run")
         mark_primary(self._run_button)
         self._run_button.clicked.connect(self.run_requested)
         buttons_row.addWidget(self._run_button)
@@ -71,6 +82,17 @@ class SummaryPage(QWidget):
 
     def _on_wall_toggled(self, checked: bool) -> None:
         self._state.add_wall_beads = checked
+
+    def _on_save_config(self) -> None:
+        path = ask_config_save_path(self, self._state.working_directory, TOOL)
+        if path is None:
+            return
+        try:
+            save_config(self._state, path)
+        except OSError as exc:
+            self._save_status.setText(f"Could not save the config: {exc}")
+            return
+        self._save_status.setText(f"Saved the config to {path}")
 
     def _on_advanced_clicked(self) -> None:
         dialog = AdvancedWindow(self._state, self)

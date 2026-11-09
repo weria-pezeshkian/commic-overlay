@@ -1,4 +1,5 @@
-"""ParametersPage: center/rotate/remove-tmd, plus Advanced and Continue (to the Run page)."""
+"""ParametersPage: center/rotate/remove-tmd, plus Save config, Advanced and Continue (to the
+Run page)."""
 
 from __future__ import annotations
 
@@ -6,10 +7,12 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
 from ...theme import mark_primary
+from ...widgets.config_dialogs import ask_config_save_path
 from ..calm_bridge import outputs
 from ..calm_bridge.introspect import field_specs, full_command_spec, lipids_command_spec
 from ..calm_bridge.runner import build_argv
 from ..calm_bridge.system import default_worker_count
+from ..config import TOOL, save_config
 from ..state import WizardState
 
 
@@ -90,7 +93,16 @@ class ParametersPage(QWidget):
 
         layout.addStretch(1)
 
+        self._save_status = QLabel()
+        self._save_status.setStyleSheet("color: #555;")
+        self._save_status.setWordWrap(True)
+        layout.addWidget(self._save_status)
+
         buttons_row = QHBoxLayout()
+        save_button = QPushButton("Save config")
+        save_button.setToolTip("Saves every step's settings to a file Load config on Working Directory reads back.")
+        save_button.clicked.connect(self._on_save_config)
+        buttons_row.addWidget(save_button)
         buttons_row.addStretch(1)
         advanced_button = QPushButton("Advanced")
         advanced_button.clicked.connect(self.advanced_requested)
@@ -124,10 +136,25 @@ class ParametersPage(QWidget):
             self._rotate_check.setChecked(False)
             self._remove_tmd_check.setChecked(False)
 
-    def _on_continue_clicked(self) -> None:
+    def _store_fields(self) -> None:
         self._state.center_selection = self._center_edit.text().strip()
         self._state.rotate = self._rotate_check.isChecked()
         self._state.remove_tmd = self._remove_tmd_check.isChecked()
+
+    def _on_save_config(self) -> None:
+        self._store_fields()
+        path = ask_config_save_path(self, self._state.working_directory, TOOL)
+        if path is None:
+            return
+        try:
+            save_config(self._state, path)
+        except OSError as exc:
+            self._save_status.setText(f"Could not save the config: {exc}")
+            return
+        self._save_status.setText(f"Saved the config to {path}")
+
+    def _on_continue_clicked(self) -> None:
+        self._store_fields()
 
         working_dir = self._state.working_directory
         targets = []

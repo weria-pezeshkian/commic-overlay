@@ -57,6 +57,14 @@ the command was run in. Started without a terminal (for example from a
 desktop launcher), it offers the most recently used working directory, or
 your home directory on first use.
 
+Every setting of a CALM or TS2CG wizard can be kept in a JSON config file.
+Run writes one into the working directory (`calm_config.json` or
+`ts2cg_config.json`, replaced on every run), and Save config, on CALM's
+Parameters page and TS2CG's Summary page, writes one under a name of your
+choice. Load config, on the Working Directory page, fills in every step
+from such a file; Continue then goes straight to Parameters or the
+Summary. Each tool loads only its own configs.
+
 ## Project layout
 
 - `commic_overlay/` — tool-agnostic shell: the main window, top nav bar,

@@ -8,6 +8,9 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QFrame, QMainWindow, QMessageBox, QStackedWidget, QVBoxLayout, QWidget
 
+from .calm.config import load_config as load_calm_config
+from .calm.config import run_config_path as calm_run_config_path
+from .calm.config import save_config as save_calm_config
 from .calm.pages.advanced_window import AdvancedWindow
 from .calm.pages.lipid_species_page import LipidSpeciesPage
 from .calm.pages.parameters_page import ParametersPage
@@ -21,6 +24,9 @@ from .calm.state import WizardState as CalmWizardState
 from .pages.home_page import HomePage
 from .pages.working_dir_page import WorkingDirPage
 from .theme import apply_drop_shadow
+from .ts2cg.config import load_config as load_ts2cg_config
+from .ts2cg.config import run_config_path as ts2cg_run_config_path
+from .ts2cg.config import save_config as save_ts2cg_config
 from .ts2cg.pages.add_protein_page import AddProteinPage
 from .ts2cg.pages.analytical_shape_page import AnalyticalShapePage
 from .ts2cg.pages.distribute_domains_page import DistributeDomainsPage
@@ -28,6 +34,7 @@ from .ts2cg.pages.domain_count_page import DomainCountPage
 from .ts2cg.pages.mesh_file_page import MeshFilePage
 from .ts2cg.pages.path_choice_page import PathChoicePage
 from .ts2cg.pages.place_domains_page import PlaceDomainsPage
+from .ts2cg.pages.preview_progress import ensure_preview
 from .ts2cg.pages.results_page import ResultsPage as Ts2cgResultsPage
 from .ts2cg.pages.run_page import RunPage as Ts2cgRunPage
 from .ts2cg.pages.select_lipids_page import SelectLipidsPage
@@ -35,6 +42,7 @@ from .ts2cg.pages.sort_lipids_page import SortLipidsPage
 from .ts2cg.pages.summary_page import SummaryPage
 from .ts2cg.state import WizardState as Ts2cgWizardState
 from .ts2cg.ts2cg_bridge.pipeline import build_pipeline
+from .ts2cg.ts2cg_bridge.preview_membrane import preview_signature
 from .widgets.wizard_nav_bar import NavStep, WizardNavBar
 
 # Each tool's own step sequence for the second nav row - "Home" isn't part of
@@ -71,6 +79,15 @@ _TS2CG_STEPS = [
     NavStep("results", "Results"),
 ]
 _TS2CG_STEP_ORDER = [step.key for step in _TS2CG_STEPS]
+
+# A loaded config fills in every step up to these; Continue on Working Directory goes there.
+_CALM_LOADED_STEP = "parameters"
+_TS2CG_LOADED_STEP = "summary"
+_CONFIG_LOAD_ERRORS = (OSError, ValueError, TypeError, KeyError, AttributeError)
+_STALE_PICKED_POINTS = (
+    "The membrane settings changed since the points on Place Domains were picked. Reopen "
+    "Place Domains and pick them again."
+)
 
 
 class MainWindow(QMainWindow):
@@ -128,22 +145,22 @@ class MainWindow(QMainWindow):
                 self._stack.removeWidget(old)
                 old.deleteLater()
 
-    def _build_calm_tool_pages(self) -> None:
-        """(Re)builds every CALM-specific page from a fresh WizardState.
+    def _build_calm_tool_pages(self, state: CalmWizardState | None = None) -> None:
+        """(Re)builds every CALM-specific page from `state`, a fresh WizardState by default.
 
-        Used whenever CALM is (re-)entered from Home - a full rebuild, not
-        just resetting the shared WizardState, so no stale widget state (a
-        previously picked file's path label, a ticked checkbox) survives a
-        restart either.
+        Used whenever CALM is (re-)entered from Home or a config is loaded - a full
+        rebuild, not just resetting the shared WizardState, so no stale widget state (a
+        previously picked file's path label, a ticked checkbox) survives a restart either.
         """
         self._teardown_tool_pages(_CALM_STEP_ORDER)
 
-        self._state = CalmWizardState()
+        self._state = state if state is not None else CalmWizardState()
         self._step_order = _CALM_STEP_ORDER
         self._furthest_key = "working_dir"
 
         working_dir_page = WorkingDirPage(self._launch_directory)
         working_dir_page.continue_requested.connect(self._on_calm_working_dir_continue)
+        working_dir_page.load_config_requested.connect(self._on_load_config_requested)
         self._add_page("working_dir", working_dir_page)
 
         structure = StructurePage(self._state)
@@ -178,17 +195,18 @@ class MainWindow(QMainWindow):
         results = ResultsPage(self._state)
         self._add_page("results", results)
 
-    def _build_ts2cg_tool_pages(self) -> None:
-        """(Re)builds every TS2CG-specific page from a fresh WizardState - same full-rebuild
-        discipline as `_build_calm_tool_pages`."""
+    def _build_ts2cg_tool_pages(self, state: Ts2cgWizardState | None = None) -> None:
+        """(Re)builds every TS2CG-specific page from `state`, a fresh WizardState by default -
+        same full-rebuild discipline as `_build_calm_tool_pages`."""
         self._teardown_tool_pages(_TS2CG_STEP_ORDER)
 
-        self._state = Ts2cgWizardState()
+        self._state = state if state is not None else Ts2cgWizardState()
         self._step_order = _TS2CG_STEP_ORDER
         self._furthest_key = "working_dir"
 
         working_dir_page = WorkingDirPage(self._launch_directory)
         working_dir_page.continue_requested.connect(self._on_ts2cg_working_dir_continue)
+        working_dir_page.load_config_requested.connect(self._on_load_config_requested)
         self._add_page("working_dir", working_dir_page)
 
         path_choice = PathChoicePage(self._state)
@@ -304,6 +322,43 @@ class MainWindow(QMainWindow):
         self._active_tool = ""
         self._go_to_home()
 
+    # ---- config files ----
+
+    def _on_load_config_requested(self, path: Path) -> None:
+        """Rebuilds the current tool's pages from the config at `path`, unlocks every step up
+        to the last one before Run, and stays on Working Directory to confirm the directory."""
+        try:
+            state = load_calm_config(path) if self._active_tool == "calm" else load_ts2cg_config(path)
+        except _CONFIG_LOAD_ERRORS as exc:
+            QMessageBox.critical(self, "Could not load config", f"{path}\n\n{exc}")
+            return
+
+        if isinstance(state, CalmWizardState):
+            self._build_calm_tool_pages(state)
+            self._nav_bar.set_tool_steps(_CALM_STEPS)
+            if state.run_lipids:
+                self._nav_bar.show_step("lipid_species")
+            self._unlock_through(_CALM_LOADED_STEP)
+            next_step = "Parameters"
+        else:
+            self._build_ts2cg_tool_pages(state)
+            self._nav_bar.set_tool_steps(_TS2CG_STEPS)
+            if state.path_choice in ("analytical_shape", "mesh_file"):
+                self._nav_bar.show_step(state.path_choice)
+            if state.domain_count > 1:
+                self._nav_bar.show_step("place_domains")
+            self._unlock_through(_TS2CG_LOADED_STEP)
+            next_step = "the Summary"
+
+        self._pages["working_dir"].show_loaded_config(path, Path(self._state.working_directory), next_step)
+        self._go_to("working_dir")
+
+    def _unlock_through(self, last_key: str) -> None:
+        """Unlocks every step up to `last_key` and makes it the furthest step reached."""
+        for key in self._step_order[: self._step_order.index(last_key) + 1]:
+            self._nav_bar.unlock(key)
+        self._furthest_key = last_key
+
     # ---- CALM ----
 
     def _on_calm_working_dir_continue(self) -> None:
@@ -339,6 +394,7 @@ class MainWindow(QMainWindow):
         # mistaken for already-current (see calm/state.py's own docstring).
         self._state.run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         self._state.rendered_plots = {}
+        save_calm_config(self._state, calm_run_config_path(self._state.working_directory))
         self._go_to("run")
         self._pages["run"].start(commands)
 
@@ -380,6 +436,26 @@ class MainWindow(QMainWindow):
         # _on_parameters_run_requested - see its own comment for why
         # run_id is stamped fresh here, right before Run starts.
         self._state.run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        if not self._ts2cg_picked_points_checkable():
+            return
+        save_ts2cg_config(self._state, ts2cg_run_config_path(self._state.working_directory))
         steps = build_pipeline(self._state)
         self._go_to("run")
         self._pages["run"].start(steps)
+
+    def _ts2cg_picked_points_checkable(self) -> bool:
+        """Whether Run has the preview its picked-point check compares against. A loaded
+        config has none yet: it is rebuilt from the settings the points were picked on, or,
+        when those settings changed, the user is sent back to Place Domains."""
+        state = self._state
+        if state.preview_point_dir is not None or not any(op.point_ids for op in state.domain_ops):
+            return True
+        if state.preview_signature != preview_signature(state):
+            QMessageBox.warning(self, "Picked points are out of date", _STALE_PICKED_POINTS)
+            return False
+        try:
+            ensure_preview(self, state)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user, not a programming error
+            QMessageBox.critical(self, "Could not build the preview", str(exc))
+            return False
+        return True
